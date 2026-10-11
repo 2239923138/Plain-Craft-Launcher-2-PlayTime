@@ -12,7 +12,9 @@ Public Module ModPlayTime
     Private Const TicksPerSecond As Long = 20
 
     ''' <summary>
-    ''' 读取一个统计文件里的游玩时长,单位 tick。文件不存在、损坏或格式无法识别均返回 0。
+    ''' 读取一个统计文件里的游玩时长,单位 tick。
+    ''' 文件不存在、或格式正常但没有可识别的时长字段,返回 0;
+    ''' 文件存在但读取或解析失败,返回 -1(调用方据此显示「出错」)。
     ''' </summary>
     Public Function PlayTimeFromStatsFile(FilePath As String) As Long
         If Not FileUtils.Exists(FilePath) Then Return 0
@@ -20,10 +22,10 @@ Public Module ModPlayTime
         Try
             Json = FileUtils.ReadAsJson(Of JObject)(FilePath)
         Catch ex As Exception
-            Logger.Warn(ex, "读取存档统计文件失败,已跳过:" & FilePath)
-            Return 0
+            Logger.Warn(ex, "读取存档统计文件失败:" & FilePath)
+            Return -1
         End Try
-        If Json Is Nothing Then Return 0
+        If Json Is Nothing Then Return -1
 
         '格式 A / B:1.13+ 的嵌套结构 {"stats":{"minecraft:custom":{"minecraft:play_time":123}}}
         Dim Custom As JObject = Nothing
@@ -57,11 +59,12 @@ Public Module ModPlayTime
 #Region "格式化"
 
     ''' <summary>
-    ''' 把 tick 格式化为可读文本。1 小时以上显示「x 小时 y 分钟」,
-    ''' 1 分钟以上显示「x 分钟」,不足 1 分钟显示「x 秒」,0 或负数显示破折号。
+    ''' 把 tick 格式化为可读文本。-1 显示「出错」,0 显示破折号,
+    ''' 1 小时以上显示「x 小时 y 分钟」,1 分钟以上显示「x 分钟」,不足 1 分钟显示「x 秒」。
     ''' </summary>
     Public Function PlayTimeFormat(Ticks As Long) As String
-        If Ticks <= 0 Then Return "—"
+        If Ticks < 0 Then Return "出错"
+        If Ticks = 0 Then Return "—"
         Dim TotalSeconds = Ticks \ TicksPerSecond
         Dim Hours = TotalSeconds \ 3600
         Dim Minutes = (TotalSeconds Mod 3600) \ 60
@@ -75,25 +78,48 @@ Public Module ModPlayTime
 #Region "账号 UUID"
 
     ''' <summary>
-    ''' 当前账号可能对应的全部统计文件 UUID,统一成「小写、去掉连字符」的形式。
-    ''' 同时包含在线账号与按用户名推导出的离线 UUID —— 同一个存档可能两种都留下过文件。
+    ''' 当前账号在统计目录里的匹配信息。
     ''' </summary>
-    Public Function PlayTimeAccountUuids() As List(Of String)
-        Dim Result As New List(Of String)
-        PlayTimeAddUuid(Result, Settings.Get(Of String)("CacheMsV2Uuid"))
-        PlayTimeAddUuid(Result, Settings.Get(Of String)("CacheNideUuid"))
-        PlayTimeAddUuid(Result, Settings.Get(Of String)("CacheAuthUuid"))
-        '离线登录:LoginLegacyName 的格式是「名称¨皮肤类型」,只取名称部分
+    Public Class PlayTimeAccount
+
+        ''' <summary>在线账号的完整 UUID,统一成 32 位小写十六进制(无连字符)。</summary>
+        Public ReadOnly Online As New List(Of String)
+
+        ''' <summary>离线账号 UUID 的前 27 位前缀。空串表示没有可用的离线账号。</summary>
+        Public OfflinePrefix As String = ""
+
+        ''' <summary>判断一个统计文件名(不含扩展名)是否属于当前账号。</summary>
+        Public Function Matches(UuidFromFile As String) As Boolean
+            Dim U As String = If(UuidFromFile, "").Replace("-", "").ToLowerInvariant()
+            If U.Length <> 32 Then Return False
+            If Online.Contains(U) Then Return True
+            Return OfflinePrefix <> "" AndAlso U.StartsWith(OfflinePrefix)
+        End Function
+
+    End Class
+
+    ''' <summary>
+    ''' 当前账号的匹配信息。
+    ''' 离线账号只比前 27 位,是因为 PCL 会按离线皮肤设置递增 UUID 的最后 5 位
+    ''' (McLoginLegacyUuidWithCustomSkin),前 27 位才是该用户名稳定的部分。
+    ''' </summary>
+    Public Function PlayTimeCurrentAccount() As PlayTimeAccount
+        Dim Result As New PlayTimeAccount
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheMsV2Uuid"))
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheNideUuid"))
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheAuthUuid"))
+        '离线登录:LoginLegacyName 是以 ¨ 分隔的玩家名列表,第一个是当前使用的那个
         Dim LegacyName = Settings.Get(Of String)("LoginLegacyName")
         If Not String.IsNullOrWhiteSpace(LegacyName) Then
-            PlayTimeAddUuid(Result, McLoginLegacyUuid(LegacyName.BeforeFirst("¨")))
+            Dim Uuid As String = McLoginLegacyUuid(LegacyName.BeforeFirst("¨")).Replace("-", "").ToLowerInvariant()
+            If Uuid.Length = 32 Then Result.OfflinePrefix = Uuid.Substring(0, 27)
         End If
-        Return Result.Distinct().ToList
+        Return Result
     End Function
 
-    Private Sub PlayTimeAddUuid(Target As List(Of String), Uuid As String)
+    Private Sub PlayTimeAddOnline(Target As PlayTimeAccount, Uuid As String)
         If String.IsNullOrWhiteSpace(Uuid) Then Return
-        Target.Add(Uuid.Replace("-", "").ToLowerInvariant())
+        Target.Online.Add(Uuid.Replace("-", "").ToLowerInvariant())
     End Sub
 
 #End Region
