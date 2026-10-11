@@ -2150,6 +2150,8 @@ IgnoreCustomSkin:
         End If
         Loader.Output = GameProcess
         McLaunchProcess = GameProcess
+        '记录启动快照,便于退出时定位要更新哪个版本
+        PlayTimeMarkLaunch()
 
         '进程优先级处理
         Try
@@ -2211,6 +2213,9 @@ IgnoreCustomSkin:
     End Sub
     Private Sub McLaunchEnd()
         McLaunchLog("开始启动结束处理")
+        '游戏已退出,更新刚玩过的那个版本,并清掉待更新标记
+        PlayTimeUpdateCurrent(McInstanceSelected)
+        PlayTimeMarkLaunchFinished()
 
         '暂停或开始音乐播放
         If Settings.Get(Of Boolean)("UiMusicStop") Then

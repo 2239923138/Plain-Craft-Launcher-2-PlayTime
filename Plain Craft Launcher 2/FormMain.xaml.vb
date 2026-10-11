@@ -878,6 +878,11 @@ Public Class FormMain
         Catch ex As Exception
             Logger.Error(ex, "切回窗口时出错")
         End Try
+        '若上次游戏启动后 PCL 没等到进程退出,这里补一次统计
+        RunInNewThread(Sub()
+                           LoaderFolderRun(McInstanceListLoader, McFolderSelected, LoaderFolderRunType.RunOnUpdated, MaxDepth:=1, ExtraPath:="versions\", WaitForExit:=True)
+                           PlayTimeCatchUp()
+                       End Sub, "PlayTime CatchUp")
         '读取剪贴板，自动加入联机房间
         Return 'TODO: 联机复活赛
         If PageLinkMain.LinkState <> PageLinkMain.LinkStates.Waiting Then Return '已启动联机

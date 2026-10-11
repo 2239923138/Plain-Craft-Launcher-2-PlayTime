@@ -276,4 +276,88 @@ Public Module ModPlayTime
 
 #End Region
 
+#Region "异步加载与触发"
+
+    ''' <summary>版本文件夹路径 → 该版本的游玩总时长(tick)。由 PlayTimeLoader 在后台填充,UI 只读。</summary>
+    Public ReadOnly PlayTimeVersionCache As New ConcurrentDictionary(Of String, Long)
+
+    Public PlayTimeLoader As New LoaderTask(Of Integer, Integer)("游戏时长统计", AddressOf PlayTimeLoad)
+
+    Private Sub PlayTimeLoad(Loader As LoaderTask(Of Integer, Integer))
+        Dim Instances = McInstanceList.Values.SelectMany(Function(List) List).ToList
+        Dim Done As Integer = 0
+        For Each Instance In Instances
+            If Loader.IsCanceled Then Return
+            PlayTimeVersionCache(Instance.PathVersion) = PlayTimeGetVersion(Instance)
+            Done += 1
+            Loader.Progress = Done / Math.Max(1.0, Instances.Count)
+        Next
+        PlayTimeCacheSave()
+        Logger.Info($"游戏时长统计完成,共 {Instances.Count} 个版本")
+    End Sub
+
+    ''' <summary>只更新一个版本。PlayTimeGetVersion 内部靠 mtime 跳过没变过的存档。</summary>
+    Public Sub PlayTimeUpdateCurrent(Instance As McInstance)
+        If Instance Is Nothing Then Return
+        Try
+            PlayTimeVersionCache(Instance.PathVersion) = PlayTimeGetVersion(Instance)
+            PlayTimeCacheSave()
+        Catch ex As Exception
+            Logger.Warn(ex, $"更新版本游戏时长失败:{Instance.Name}")
+        End Try
+    End Sub
+
+    ''' <summary>游戏启动前记录一次快照,退出时据此知道要更新哪个版本。</summary>
+    Public Sub PlayTimeMarkLaunch()
+        Try
+            Dim Cache = PlayTimeCacheGet()
+            Cache("LastLaunchVersion") = If(McInstanceSelected Is Nothing, "", McInstanceSelected.PathVersion)
+            Cache("LastLaunchPending") = True
+            PlayTimeCacheSave()
+        Catch ex As Exception
+            Logger.Warn(ex, "记录游戏时长启动快照失败")
+        End Try
+    End Sub
+
+    ''' <summary>游戏进程退出后调用,清掉待更新标记。</summary>
+    Public Sub PlayTimeMarkLaunchFinished()
+        Try
+            PlayTimeCacheGet()("LastLaunchPending") = False
+            PlayTimeCacheSave()
+        Catch ex As Exception
+            Logger.Warn(ex, "清除游戏时长启动快照失败")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' PCL 启动时调用。若上一次游戏启动后 PCL 没等到进程退出就关了,
+    ''' 这里补做一次那个版本的更新。
+    ''' </summary>
+    Public Sub PlayTimeCatchUp()
+        Try
+            Dim Cache = PlayTimeCacheGet()
+            Dim Pending = Cache.Item("LastLaunchPending")
+            If Pending Is Nothing OrElse Pending.Type <> JTokenType.Boolean OrElse Not Pending.ToObject(Of Boolean)() Then Return
+            Dim Path As String = If(Cache.Item("LastLaunchVersion") Is Nothing, "", Cache.Item("LastLaunchVersion").ToString)
+            Cache("LastLaunchPending") = False
+            PlayTimeCacheSave()
+            If Path = "" Then Return
+            Dim Instance = McInstanceList.Values.SelectMany(Function(List) List).FirstOrDefault(Function(I) I.PathVersion = Path)
+            If Instance IsNot Nothing Then
+                Logger.Info($"检测到上次游戏启动未收尾,补更新游戏时长:{Instance.Name}")
+                PlayTimeUpdateCurrent(Instance)
+            End If
+        Catch ex As Exception
+            Logger.Warn(ex, "补更新游戏时长失败")
+        End Try
+    End Sub
+
+    ''' <summary>手动刷新:清缓存后重扫全部版本。</summary>
+    Public Sub PlayTimeRefreshAll()
+        PlayTimeClearCache()
+        PlayTimeLoader.Start(0, IsForceRestart:=True)
+    End Sub
+
+#End Region
+
 End Module
