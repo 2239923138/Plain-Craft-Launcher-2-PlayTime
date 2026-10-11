@@ -83,7 +83,12 @@ if not exist "%SRCDIR%\Plain Craft Launcher 2.exe" (
 set "DSTDIR=dist\%CONFIG%"
 if not exist "%DSTDIR%" mkdir "%DSTDIR%"
 
-copy /y "%SRCDIR%\Plain Craft Launcher 2.exe" "%DSTDIR%\" >nul
+rem Output file name. Only the file name changes -- AssemblyName stays
+rem "Plain Craft Launcher 2", so WPF pack URIs (/Assembly;component/...)
+rem and XAML clr-namespace references keep resolving.
+set "OUTNAME=PCL2_ACE.exe"
+
+copy /y "%SRCDIR%\Plain Craft Launcher 2.exe" "%DSTDIR%\%OUTNAME%" >nul
 if errorlevel 1 (
     echo [ERROR] Failed to copy the exe.
     goto :fail
@@ -91,12 +96,12 @@ if errorlevel 1 (
 
 rem the .exe.config is only picked up when it matches the exe name
 set "SRCCFG=Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe.config"
-if exist "%SRCCFG%" copy /y "%SRCCFG%" "%DSTDIR%\" >nul
+if exist "%SRCCFG%" copy /y "%SRCCFG%" "%DSTDIR%\%OUTNAME%.config" >nul
 
 echo.
 echo ============================================================
 echo   BUILD OK
-echo   Output: %CD%\%DSTDIR%\Plain Craft Launcher 2.exe
+echo   Output: %CD%\%DSTDIR%\%OUTNAME%
 echo ============================================================
 echo.
 

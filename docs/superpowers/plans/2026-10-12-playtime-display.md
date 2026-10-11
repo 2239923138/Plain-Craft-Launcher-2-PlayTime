@@ -444,6 +444,26 @@ git commit -m "feat(playtime): 新增统计文件解析、时长格式化与账�
 #Region "扫描存档与版本"
 
     ''' <summary>
+    ''' 当前账号的指纹。统计结果与账号相关(只算自己那份统计文件),
+    ''' 而切换账号不会改动统计文件的修改时间,所以缓存必须带上它才能自动失效。
+    ''' </summary>
+    Private Function PlayTimeAccountFingerprint() As String
+        Dim Account = PlayTimeCurrentAccount()
+        Return Account.OfflinePrefix & "|" & String.Join(",", Account.Online.OrderBy(Function(S) S))
+    End Function
+
+    ''' <summary>
+    ''' 判断一条缓存是否仍然有效。三个条件都要满足:Ticks 存在、Mtime 没变、账号指纹一致。
+    ''' Ticks 缺失时不能当成 -1(那是「出错」的意思),否则一条残缺的缓存会被永久当成出错。
+    ''' </summary>
+    Private Function PlayTimeCacheHit(Cached As JObject, Mtime As Long, Fingerprint As String) As Boolean
+        If Cached.Item("Ticks") Is Nothing Then Return False
+        If PlayTimeReadTicks(Cached.Item("Mtime")) <> Mtime Then Return False
+        Dim Account = Cached.Item("Account")
+        Return Account IsNot Nothing AndAlso Account.ToString = Fingerprint
+    End Function
+
+    ''' <summary>
     ''' 单个存档中属于当前账号的游玩时长(tick)。SavePath 必须以 \ 结尾。
     ''' 优先按账号匹配统计文件;一个都匹配不上时,若该存档只有一个统计文件
     ''' (单机存档的常见情况)则直接采用,多个文件时无法判定归属,返回 -1(出错)。
@@ -456,22 +476,23 @@ git commit -m "feat(playtime): 新增统计文件解析、时长格式化与账�
         If Files.Count = 0 Then Return 0
 
         Dim Mtime = PlayTimeStatsMtime(StatsFolder)
+        Dim Fingerprint = PlayTimeAccountFingerprint()
         If UseCache Then
             Dim Saves = CType(PlayTimeCacheGet().Item("Saves"), JObject)
             Dim Cached = TryCast(Saves.Item(SavePath), JObject)
-            '两个字段都必须在才算缓存有效。Ticks 缺失时不能当成 -1(那是「出错」的意思),
-            '否则一条残缺的缓存会被永久当成出错。
-            If Cached IsNot Nothing AndAlso Cached.Item("Ticks") IsNot Nothing AndAlso
-               PlayTimeReadTicks(Cached.Item("Mtime")) = Mtime Then
+            If Cached IsNot Nothing AndAlso PlayTimeCacheHit(Cached, Mtime, Fingerprint) Then
                 Return PlayTimeReadTicks(Cached.Item("Ticks"))
             End If
         End If
 
         Dim Fresh = PlayTimeSumFiles(Files)
-        If UseCache Then
+        '读取失败(-1)不写缓存。否则一次偶发失败会因为 mtime 没变而被固化,
+        '之后每次命中都返回「出错」,直到统计文件被改动为止。
+        If UseCache AndAlso Fresh >= 0 Then
             Dim Entry As New JObject
             Entry("Mtime") = Mtime
             Entry("Ticks") = Fresh
+            Entry("Account") = Fingerprint
             CType(PlayTimeCacheGet().Item("Saves"), JObject)(SavePath) = Entry
             '这里刻意不落盘 —— 一次全量扫描会调用本函数几十次,每个存档写一次文件太重。
             '落盘交给调用方:PlayTimeLoad / PlayTimeUpdateCurrent 在收尾时统一 PlayTimeCacheSave()。
