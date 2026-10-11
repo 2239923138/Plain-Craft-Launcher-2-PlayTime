@@ -124,4 +124,135 @@ Public Module ModPlayTime
 
 #End Region
 
+#Region "缓存"
+
+    '缓存文件里存每个存档「上次统计时 stats 目录的最新修改时间」,
+    '下次统计只要这个时间没变就跳过重读,避免每次都把所有存档的 JSON 解析一遍。
+    Private ReadOnly Property PlayTimeCachePath As String
+        Get
+            Return PathTemp & "Cache\PlayTime.json"
+        End Get
+    End Property
+
+    Private _PlayTimeCache As JObject = Nothing
+
+    Private Function PlayTimeCacheGet() As JObject
+        If _PlayTimeCache Is Nothing Then
+            Try
+                _PlayTimeCache = FileUtils.ReadAsJson(Of JObject)(PlayTimeCachePath)
+            Catch ex As Exception
+                Logger.Warn(ex, "读取游戏时长缓存失败,已重置")
+            End Try
+            If _PlayTimeCache Is Nothing Then _PlayTimeCache = New JObject
+            If _PlayTimeCache.Item("Saves") Is Nothing Then _PlayTimeCache("Saves") = New JObject
+        End If
+        Return _PlayTimeCache
+    End Function
+
+    Public Sub PlayTimeCacheSave()
+        If _PlayTimeCache Is Nothing Then Return
+        Try
+            DirectoryUtils.Create(IO.Path.GetDirectoryName(PlayTimeCachePath))
+            FileUtils.Write(PlayTimeCachePath, _PlayTimeCache.ToString(Formatting.None))
+        Catch ex As Exception
+            Logger.Warn(ex, "写入游戏时长缓存失败")
+        End Try
+    End Sub
+
+    ''' <summary>清空内存与磁盘缓存。手动刷新时调用。</summary>
+    Public Sub PlayTimeClearCache()
+        _PlayTimeCache = New JObject
+        _PlayTimeCache("Saves") = New JObject
+        PlayTimeCacheSave()
+    End Sub
+
+    ''' <summary>取一个存档 stats 目录下所有 JSON 的最新修改时间(UTC tick)。没有文件返回 0。</summary>
+    Private Function PlayTimeStatsMtime(StatsFolder As String) As Long
+        Dim Latest As Long = 0
+        For Each File In DirectoryUtils.EnumerateFiles(StatsFolder, False, "*.json")
+            Dim T = FileUtils.GetInfo(File).LastWriteTimeUtc.Ticks
+            If T > Latest Then Latest = T
+        Next
+        Return Latest
+    End Function
+
+#End Region
+
+#Region "扫描存档与版本"
+
+    ''' <summary>
+    ''' 单个存档中属于当前账号的游玩时长(tick)。SavePath 必须以 \ 结尾。
+    ''' 优先按账号匹配统计文件;一个都匹配不上时,若该存档只有一个统计文件
+    ''' (单机存档的常见情况)则直接采用,多个文件时无法判定归属,返回 -1(出错)。
+    ''' 被采用的任意一个文件读取失败,也返回 -1。
+    ''' </summary>
+    Public Function PlayTimeGetSave(SavePath As String, Optional UseCache As Boolean = True) As Long
+        Dim StatsFolder As String = SavePath & "stats\"
+        If Not DirectoryUtils.Exists(StatsFolder) Then Return 0
+        Dim Files = DirectoryUtils.EnumerateFiles(StatsFolder, False, "*.json").ToList
+        If Files.Count = 0 Then Return 0
+
+        Dim Mtime = PlayTimeStatsMtime(StatsFolder)
+        If UseCache Then
+            Dim Saves = CType(PlayTimeCacheGet().Item("Saves"), JObject)
+            Dim Cached = TryCast(Saves.Item(SavePath), JObject)
+            '两个字段都必须在才算缓存有效。Ticks 缺失时不能当成 -1(那是「出错」的意思),
+            '否则一条残缺的缓存会被永久当成出错。
+            If Cached IsNot Nothing AndAlso Cached.Item("Ticks") IsNot Nothing AndAlso
+               PlayTimeReadTicks(Cached.Item("Mtime")) = Mtime Then
+                Return PlayTimeReadTicks(Cached.Item("Ticks"))
+            End If
+        End If
+
+        Dim Fresh = PlayTimeSumFiles(Files)
+        If UseCache Then
+            Dim Entry As New JObject
+            Entry("Mtime") = Mtime
+            Entry("Ticks") = Fresh
+            CType(PlayTimeCacheGet().Item("Saves"), JObject)(SavePath) = Entry
+            '这里刻意不落盘 —— 一次全量扫描会调用本函数几十次,每个存档写一次文件太重。
+            '落盘交给调用方:PlayTimeLoad / PlayTimeUpdateCurrent 在收尾时统一 PlayTimeCacheSave()。
+        End If
+        Return Fresh
+    End Function
+
+    ''' <summary>
+    ''' 从一组统计文件里挑出属于当前账号的并求和。
+    ''' 匹不上归属时:只有一个文件就直接采用,多个文件无法判定,返回 -1。
+    ''' 被采用的文件里任意一个读取失败,整个存档也返回 -1。
+    ''' </summary>
+    Private Function PlayTimeSumFiles(Files As List(Of String)) As Long
+        Dim Account = PlayTimeCurrentAccount()
+        Dim Matched = Files.Where(Function(F) Account.Matches(IO.Path.GetFileNameWithoutExtension(F))).ToList
+        If Matched.Count = 0 Then
+            If Files.Count <> 1 Then Return -1
+            Matched = Files
+        End If
+        Dim Total As Long = 0
+        For Each File In Matched
+            Dim Ticks = PlayTimeFromStatsFile(File)
+            If Ticks < 0 Then Return -1
+            Total += Ticks
+        Next
+        Return Total
+    End Function
+
+    ''' <summary>
+    ''' 某个版本下全部存档的游玩时长合计(tick)。
+    ''' 任意一个存档出错就整体返回 -1,让界面显示「出错」,而不是给出一个偏低但看起来正常的数。
+    ''' </summary>
+    Public Function PlayTimeGetVersion(Instance As McInstance, Optional UseCache As Boolean = True) As Long
+        Dim SavesFolder As String = Instance.PathIndie & "saves\"
+        If Not DirectoryUtils.Exists(SavesFolder) Then Return 0
+        Dim Total As Long = 0
+        For Each Save As IO.DirectoryInfo In DirectoryUtils.GetInfo(SavesFolder).EnumerateDirectories
+            Dim Ticks = PlayTimeGetSave(Save.FullName & "\", UseCache)
+            If Ticks < 0 Then Return -1
+            Total += Ticks
+        Next
+        Return Total
+    End Function
+
+#End Region
+
 End Module
