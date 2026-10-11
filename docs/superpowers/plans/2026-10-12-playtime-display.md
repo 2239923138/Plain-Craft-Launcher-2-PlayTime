@@ -14,6 +14,7 @@
 - 新增 `.vb` 文件必须同时加进 `Plain Craft Launcher 2\Plain Craft Launcher 2.vbproj` 的 `<Compile Include="..." />` 条目(VB 项目不自动通配)。
 - 文本文件一律 **UTF-8 无 BOM**。**不要新建含中文的 `.bat`** —— 本机代码页 936 会把中文字节吃掉导致命令损坏(仓库已有的 `build.bat` 因此全用 ASCII)。
 - 构建与产物验证统一用仓库根目录的 `build.bat`(默认 Release),产物落在 `dist\Release\`。
+- **构建产物文件名是 `PCL2_ACE.exe`**(不再是 `Plain Craft Launcher 2.exe`)。`build.bat` 只改了输出文件名,`AssemblyName` 仍是 `Plain Craft Launcher 2` —— WPF 的 pack URI 解析的是程序集元数据名而非磁盘文件名,所以源码里 25+ 处硬编码的 `assembly=Plain Craft Launcher 2` 和 pack URI 全部照常工作,**不要去「修正」它们**。已实测:改名后的 exe 能正常起窗口、图片与内嵌资源加载正常。
 - **开发时从 `dist\Release\` 运行**,不要从 `bin\` 或 `obj\` 运行 —— PCL 会在 exe 同级创建 `PCL\` 和 `.minecraft\`,在构建输出目录里会被清理掉。
 - 沿用项目既有风格:大驼峰公有成员、`Logger.Info/Error/Warn` 记日志、`RunInUi` 回填 UI、`LoaderTask` 做后台任务、`DirectoryUtils`/`FileUtils` 做文件操作。不要引入新依赖。
 
@@ -128,7 +129,7 @@ End Function
 | 微软 | `CacheMsV2Uuid` | `CacheMsV2Name` |
 | 统一通行证(Nide) | `CacheNideUuid` | `CacheNideName` |
 | Authlib-Injector | `CacheAuthUuid` | `CacheAuthName` |
-| 离线 | 由用户名推导 | `LoginLegacyName`(**值为 `名称¨皮肤类型`,要 `BeforeFirst("¨")` 截断**) |
+| 离线 | 由用户名推导 | `LoginLegacyName`(**值为以 `¨` 分隔的玩家名列表,第一个是当前使用的那个,用 `BeforeFirst("¨")` 取**) |
 
 ### 两个现成的关键锚点
 
@@ -335,7 +336,7 @@ Run:
 build.bat Release
 ```
 
-Expected: 输出以 `BUILD OK` 结尾,`Output: G:\Workspace\PCE_ACE\dist\Release\Plain Craft Launcher 2.exe`。
+Expected: 输出以 `BUILD OK` 结尾,`Output: G:\Workspace\PCE_ACE\dist\Release\PCL2_ACE.exe`。
 
 若报 `McLoginLegacyUuid` 未定义,说明它不在可访问的 `Module` 里 —— 检查 `ModLaunch.vb:1173` 所在模块的声明,必要时改成 `ModLaunch.McLoginLegacyUuid(...)`。
 
@@ -712,7 +713,7 @@ Expected: `BUILD OK`。这一步最容易出的错是 `McInstanceSelected` 在 `
 
 - [ ] **Step 6: 实测触发链路**
 
-从 `dist\Release\Plain Craft Launcher 2.exe` 启动 PCL,启动一次 Minecraft,进任意存档玩十几秒后退出游戏。然后:
+从 `dist\Release\PCL2_ACE.exe` 启动 PCL,启动一次 Minecraft,进任意存档玩十几秒后退出游戏。然后:
 
 ```bash
 grep -o '"LastLaunchPending":[a-z]*' "$TEMP/PCL/Cache/PlayTime.json"
@@ -924,7 +925,7 @@ build.bat Release
 
 Expected: `BUILD OK`。
 
-从 `dist\Release\Plain Craft Launcher 2.exe` 启动,进入「版本选择」页,滚动列表。Expected:
+从 `dist\Release\PCL2_ACE.exe` 启动,进入「版本选择」页,滚动列表。Expected:
 
 - 每个版本条目**右侧**显示时长文本,如 `5 分钟`、`23 小时 0 分钟`
 - 鼠标移到条目上时,时长文本淡出,右侧出现收藏/删除/设置按钮;移开后淡入
@@ -1071,11 +1072,11 @@ git commit -m "feat(playtime): 启动页新增游戏时长卡片与手动刷新�
 build.bat Release
 ```
 
-Expected: `BUILD OK`,`dist\Release\Plain Craft Launcher 2.exe` 时间戳刷新。
+Expected: `BUILD OK`,`dist\Release\PCL2_ACE.exe` 时间戳刷新。
 
 - [ ] **Step 2: 三处显示一致性核对**
 
-启动 `dist\Release\Plain Craft Launcher 2.exe`,对同一个版本(建议用 `1.21.8`,它有一个 `22534` tick 的存档)分别看三处:
+启动 `dist\Release\PCL2_ACE.exe`,对同一个版本(建议用 `1.21.8`,它有一个 `22534` tick 的存档)分别看三处:
 
 | 位置 | 期望 |
 |---|---|
