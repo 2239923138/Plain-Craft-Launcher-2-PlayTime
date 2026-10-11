@@ -102,6 +102,25 @@ End Function
 
 **直接调用它,不要自己实现。** 已用真实文件名反推验证:文件名 `00000000-0000-3001-998f-501bc686b6bb` 中 `3001` 的 `001` 说明当时用的离线用户名是 **1 个字符**,与算法一致。
 
+**但是游戏实际启动时用的不是这个函数。** `ModLaunch.vb:701` 用的是 `McLoginLegacyUuidWithCustomSkin(用户名, SkinType, SkinName)`,它在该结果之上按离线皮肤设置做调整(`ModLaunch.vb:1117-1145`):
+
+- `SkinType` 1/2/4 → 把 UUID **最后 5 位十六进制**递增,直到皮肤性别匹配
+- `SkinType` 3 → 可能替换成 `McLoginMojangUuid` 的结果(正版 UUID)
+
+所以存档里的文件名对「同一个离线用户名 + 不同皮肤设置」是不同的。**解法是只比前 27 位**:前 27 位在所有这些变体里都不变,只有最后 5 位会动。这就是 `PlayTimeAccount.Matches` 里离线账号走前缀比较的原因。
+
+### tick 的三种返回值约定
+
+`PlayTimeFromStatsFile` 和它下游的 `PlayTimeGetSave` / `PlayTimeGetVersion` 用同一个三态约定,UI 层靠它区分「没有」和「坏了」:
+
+| 值 | 含义 | 显示 |
+|---|---|---|
+| `> 0` | 正常时长 | 格式化后的时长 |
+| `0` | 没有数据(没存档、没有统计文件、格式正常但没有时长字段) | 什么都不显示 |
+| `-1` | 真的读取出错(文件存在但读不动或解析失败;或存档里有多个统计文件却一个都匹不上归属) | 「出错」 |
+
+**不要用 `Math.Max(0, …)` 之类的钳制把 `-1` 抹平** —— 那会让「出错」显示成一个偏低但看起来正常的数字,比不显示更糟。
+
 ### 账号 UUID 的来源(PCL 已缓存在 Settings 里)
 
 | 登录方式 | UUID 键 | 用户名键 |
@@ -162,9 +181,10 @@ End Function
 **Interfaces:**
 - Consumes: `MeloongCore` 的 `FileUtils.Exists/ReadAsJson`、`McLoginLegacyUuid`(`ModLaunch` 模块里)、`Settings.Get(Of T)`、`Logger`
 - Produces:
-  - `Public Function PlayTimeFromStatsFile(FilePath As String) As Long` —— 单个统计文件的 tick 数,无法识别返回 0
-  - `Public Function PlayTimeFormat(Ticks As Long) As String` —— tick 转可读文本
-  - `Public Function PlayTimeAccountUuids() As List(Of String)` —— 当前账号所有可能的 UUID(小写、去连字符)
+  - `Public Function PlayTimeFromStatsFile(FilePath As String) As Long` —— 单个统计文件的 tick 数;文件不存在或无时长字段返回 0,读取/解析失败返回 -1
+  - `Public Function PlayTimeFormat(Ticks As Long) As String` —— tick 转可读文本;-1 → 「出错」,0 → 「—」
+  - `Public Function PlayTimeCurrentAccount() As PlayTimeAccount` —— 当前账号的匹配信息(在线账号的完整 UUID + 离线账号的 27 位前缀)
+  - `Public Class PlayTimeAccount`,成员:`Online As List(Of String)`(32 位小写无连字符)、`OfflinePrefix As String`(27 位,空串表示无离线账号)、`Matches(UuidFromFile As String) As Boolean`
 
 - [ ] **Step 1: 创建模块骨架**
 
@@ -185,7 +205,9 @@ Public Module ModPlayTime
     Private Const TicksPerSecond As Long = 20
 
     ''' <summary>
-    ''' 读取一个统计文件里的游玩时长,单位 tick。文件不存在、损坏或格式无法识别均返回 0。
+    ''' 读取一个统计文件里的游玩时长,单位 tick。
+    ''' 文件不存在、或格式正常但没有可识别的时长字段,返回 0;
+    ''' 文件存在但读取或解析失败,返回 -1(调用方据此显示「出错」)。
     ''' </summary>
     Public Function PlayTimeFromStatsFile(FilePath As String) As Long
         If Not FileUtils.Exists(FilePath) Then Return 0
@@ -193,10 +215,10 @@ Public Module ModPlayTime
         Try
             Json = FileUtils.ReadAsJson(Of JObject)(FilePath)
         Catch ex As Exception
-            Logger.Warn(ex, "读取存档统计文件失败,已跳过:" & FilePath)
-            Return 0
+            Logger.Warn(ex, "读取存档统计文件失败:" & FilePath)
+            Return -1
         End Try
-        If Json Is Nothing Then Return 0
+        If Json Is Nothing Then Return -1
 
         '格式 A / B:1.13+ 的嵌套结构 {"stats":{"minecraft:custom":{"minecraft:play_time":123}}}
         Dim Custom As JObject = Nothing
@@ -230,11 +252,12 @@ Public Module ModPlayTime
 #Region "格式化"
 
     ''' <summary>
-    ''' 把 tick 格式化为可读文本。1 小时以上显示「x 小时 y 分钟」,
-    ''' 1 分钟以上显示「x 分钟」,不足 1 分钟显示「x 秒」,0 或负数显示破折号。
+    ''' 把 tick 格式化为可读文本。-1 显示「出错」,0 显示破折号,
+    ''' 1 小时以上显示「x 小时 y 分钟」,1 分钟以上显示「x 分钟」,不足 1 分钟显示「x 秒」。
     ''' </summary>
     Public Function PlayTimeFormat(Ticks As Long) As String
-        If Ticks <= 0 Then Return "—"
+        If Ticks < 0 Then Return "出错"
+        If Ticks = 0 Then Return "—"
         Dim TotalSeconds = Ticks \ TicksPerSecond
         Dim Hours = TotalSeconds \ 3600
         Dim Minutes = (TotalSeconds Mod 3600) \ 60
@@ -248,26 +271,49 @@ Public Module ModPlayTime
 #Region "账号 UUID"
 
     ''' <summary>
-    ''' 当前账号可能对应的全部统计文件 UUID,统一成「小写、去掉连字符」的形式。
-    ''' 同时包含在线账号与按用户名推导出的离线 UUID —— 同一个存档可能两种都留下过文件。
+    ''' 当前账号在统计目录里的匹配信息。
     ''' </summary>
-    Public Function PlayTimeAccountUuids() As List(Of String)
-        Dim Result As New List(Of String)
-        PlayTimeAddUuid(Result, Settings.Get(Of String)("CacheMsV2Uuid"))
-        PlayTimeAddUuid(Result, Settings.Get(Of String)("CacheNideUuid"))
-        PlayTimeAddUuid(Result, Settings.Get(Of String)("CacheAuthUuid"))
-        '离线登录:LoginLegacyName 的格式是「名称¨皮肤类型」,只取名称部分
+    Public Class PlayTimeAccount
+
+        ''' <summary>在线账号的完整 UUID,统一成 32 位小写十六进制(无连字符)。</summary>
+        Public ReadOnly Online As New List(Of String)
+
+        ''' <summary>离线账号 UUID 的前 27 位前缀。空串表示没有可用的离线账号。</summary>
+        Public OfflinePrefix As String = ""
+
+        ''' <summary>判断一个统计文件名(不含扩展名)是否属于当前账号。</summary>
+        Public Function Matches(UuidFromFile As String) As Boolean
+            Dim U As String = If(UuidFromFile, "").Replace("-", "").ToLowerInvariant()
+            If U.Length <> 32 Then Return False
+            If Online.Contains(U) Then Return True
+            Return OfflinePrefix <> "" AndAlso U.StartsWith(OfflinePrefix)
+        End Function
+
+    End Class
+
+    ''' <summary>
+    ''' 当前账号的匹配信息。
+    ''' 离线账号只比前 27 位,是因为 PCL 会按离线皮肤设置递增 UUID 的最后 5 位
+    ''' (McLoginLegacyUuidWithCustomSkin),前 27 位才是该用户名稳定的部分。
+    ''' </summary>
+    Public Function PlayTimeCurrentAccount() As PlayTimeAccount
+        Dim Result As New PlayTimeAccount
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheMsV2Uuid"))
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheNideUuid"))
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheAuthUuid"))
+        '离线登录:LoginLegacyName 是以 ¨ 分隔的玩家名列表,第一个是当前使用的那个
         Dim LegacyName = Settings.Get(Of String)("LoginLegacyName")
         If Not String.IsNullOrWhiteSpace(LegacyName) Then
-            PlayTimeAddUuid(Result, McLoginLegacyUuid(LegacyName.BeforeFirst("¨")))
+            Dim Uuid As String = McLoginLegacyUuid(LegacyName.BeforeFirst("¨")).Replace("-", "").ToLowerInvariant()
+            If Uuid.Length = 32 Then Result.OfflinePrefix = Uuid.Substring(0, 27)
         End If
-        Return Result.Distinct().ToList
+        Return Result
     End Function
 
-    Private Sub PlayTimeAddUuid(Target As List(Of String), Uuid As String)
+    Private Sub PlayTimeAddOnline(Target As PlayTimeAccount, Uuid As String)
         If String.IsNullOrWhiteSpace(Uuid) Then Return
-        Target.Add(Uuid.Replace("-", "").ToLowerInvariant())
-    End Sub
+        Target.Online.Add(Uuid.Replace("-", "").ToLowerInvariant())
+    End Function
 
 #End Region
 
@@ -330,10 +376,10 @@ git commit -m "feat(playtime): 新增统计文件解析、时长格式化与账�
 - Modify: `Plain Craft Launcher 2\Modules\Minecraft\ModPlayTime.vb`
 
 **Interfaces:**
-- Consumes: Task 1 的 `PlayTimeFromStatsFile` / `PlayTimeAccountUuids` / `PlayTimeReadTicks`
+- Consumes: Task 1 的 `PlayTimeFromStatsFile` / `PlayTimeCurrentAccount` / `PlayTimeReadTicks`
 - Produces:
-  - `Public Function PlayTimeGetSave(SavePath As String, Optional UseCache As Boolean = True) As Long` —— 单个存档中属于当前账号的 tick 数,`SavePath` 以 `\` 结尾
-  - `Public Function PlayTimeGetVersion(Instance As McInstance, Optional UseCache As Boolean = True) As Long` —— 该版本全部存档的合计
+  - `Public Function PlayTimeGetSave(SavePath As String, Optional UseCache As Boolean = True) As Long` —— 单个存档中属于当前账号的 tick 数,`SavePath` 以 `\` 结尾;没有数据返回 0,**读取/判定失败返回 -1**
+  - `Public Function PlayTimeGetVersion(Instance As McInstance, Optional UseCache As Boolean = True) As Long` —— 该版本全部存档的合计;任意一个存档出错则整体返回 -1
   - `Public Sub PlayTimeClearCache()` / `Public Sub PlayTimeCacheSave()`
 
 - [ ] **Step 1: 追加缓存与汇总逻辑**
@@ -399,8 +445,9 @@ git commit -m "feat(playtime): 新增统计文件解析、时长格式化与账�
 
     ''' <summary>
     ''' 单个存档中属于当前账号的游玩时长(tick)。SavePath 必须以 \ 结尾。
-    ''' 优先按账号 UUID 匹配文件;一个都匹配不上时,若该存档只有一个统计文件
-    ''' (单机存档的常见情况)则直接采用,否则无法判定归属,返回 0。
+    ''' 优先按账号匹配统计文件;一个都匹配不上时,若该存档只有一个统计文件
+    ''' (单机存档的常见情况)则直接采用,多个文件时无法判定归属,返回 -1(出错)。
+    ''' 被采用的任意一个文件读取失败,也返回 -1。
     ''' </summary>
     Public Function PlayTimeGetSave(SavePath As String, Optional UseCache As Boolean = True) As Long
         Dim StatsFolder As String = SavePath & "stats\"
@@ -412,8 +459,11 @@ git commit -m "feat(playtime): 新增统计文件解析、时长格式化与账�
         If UseCache Then
             Dim Saves = CType(PlayTimeCacheGet().Item("Saves"), JObject)
             Dim Cached = TryCast(Saves.Item(SavePath), JObject)
-            If Cached IsNot Nothing AndAlso PlayTimeReadTicks(Cached.Item("Mtime")) = Mtime Then
-                Return Math.Max(0, PlayTimeReadTicks(Cached.Item("Ticks")))
+            '两个字段都必须在才算缓存有效。Ticks 缺失时不能当成 -1(那是「出错」的意思),
+            '否则一条残缺的缓存会被永久当成出错。
+            If Cached IsNot Nothing AndAlso Cached.Item("Ticks") IsNot Nothing AndAlso
+               PlayTimeReadTicks(Cached.Item("Mtime")) = Mtime Then
+                Return PlayTimeReadTicks(Cached.Item("Ticks"))
             End If
         End If
 
@@ -429,29 +479,39 @@ git commit -m "feat(playtime): 新增统计文件解析、时长格式化与账�
         Return Fresh
     End Function
 
-    ''' <summary>按账号 UUID 从一组统计文件里挑出属于自己的并求和。</summary>
+    ''' <summary>
+    ''' 从一组统计文件里挑出属于当前账号的并求和。
+    ''' 匹不上归属时:只有一个文件就直接采用,多个文件无法判定,返回 -1。
+    ''' 被采用的文件里任意一个读取失败,整个存档也返回 -1。
+    ''' </summary>
     Private Function PlayTimeSumFiles(Files As List(Of String)) As Long
-        Dim Uuids = PlayTimeAccountUuids()
-        Dim Matched = Files.Where(Function(F) Uuids.Contains(IO.Path.GetFileNameWithoutExtension(F).Replace("-", "").ToLowerInvariant())).ToList
+        Dim Account = PlayTimeCurrentAccount()
+        Dim Matched = Files.Where(Function(F) Account.Matches(IO.Path.GetFileNameWithoutExtension(F))).ToList
         If Matched.Count = 0 Then
-            '匹配不上:只有一个文件时直接采用,多个文件时无法判定归属
-            If Files.Count <> 1 Then Return 0
+            If Files.Count <> 1 Then Return -1
             Matched = Files
         End If
         Dim Total As Long = 0
         For Each File In Matched
-            Total += PlayTimeFromStatsFile(File)
+            Dim Ticks = PlayTimeFromStatsFile(File)
+            If Ticks < 0 Then Return -1
+            Total += Ticks
         Next
         Return Total
     End Function
 
-    ''' <summary>某个版本下全部存档的游玩时长合计(tick)。</summary>
+    ''' <summary>
+    ''' 某个版本下全部存档的游玩时长合计(tick)。
+    ''' 任意一个存档出错就整体返回 -1,让界面显示「出错」,而不是给出一个偏低但看起来正常的数。
+    ''' </summary>
     Public Function PlayTimeGetVersion(Instance As McInstance, Optional UseCache As Boolean = True) As Long
         Dim SavesFolder As String = Instance.PathIndie & "saves\"
         If Not DirectoryUtils.Exists(SavesFolder) Then Return 0
         Dim Total As Long = 0
         For Each Save As IO.DirectoryInfo In DirectoryUtils.GetInfo(SavesFolder).EnumerateDirectories
-            Total += PlayTimeGetSave(Save.FullName & "\", UseCache)
+            Dim Ticks = PlayTimeGetSave(Save.FullName & "\", UseCache)
+            If Ticks < 0 Then Return -1
+            Total += Ticks
         Next
         Return Total
     End Function
@@ -907,18 +967,20 @@ git commit -m "feat(playtime): 版本条目与概览头部显示游戏时长"
             LabPlayTimeHint.Text = "还没有读取到任何游戏版本。"
             Return
         End If
+        'Ticks < 0 是「读取出错」,要一并列出让用户看见;0 表示没有游玩记录,不列
         Dim Rows = Instances.Select(Function(I)
                                         Dim T As Long = 0
                                         PlayTimeVersionCache.TryGetValue(I.PathVersion, T)
                                         Return (Instance:=I, Ticks:=T)
-                                    End Function).Where(Function(R) R.Ticks > 0).OrderByDescending(Function(R) R.Ticks).ToList
+                                    End Function).Where(Function(R) R.Ticks <> 0).OrderByDescending(Function(R) R.Ticks).ToList
         If Rows.Count = 0 Then
             LabPlayTimeHint.Text = "还没有找到游玩记录。"
             Return
         End If
         Dim Total As Long = 0
+        Dim Errored As Integer = 0
         For Each Row In Rows
-            Total += Row.Ticks
+            If Row.Ticks < 0 Then Errored += 1 Else Total += Row.Ticks
             Dim Item As New MyListItem With {
                 .Title = Row.Instance.Name,
                 .PlayTime = PlayTimeFormat(Row.Ticks),
@@ -928,7 +990,10 @@ git commit -m "feat(playtime): 版本条目与概览头部显示游戏时长"
             }
             PanPlayTimeList.Children.Add(Item)
         Next
-        LabPlayTimeHint.Text = $"共 {Rows.Count} 个版本,合计 {PlayTimeFormat(Total)}"
+        Dim OkCount = Rows.Count - Errored
+        LabPlayTimeHint.Text = If(Errored = 0,
+                                  $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)}",
+                                  $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)};另有 {Errored} 个版本读取出错")
     End Sub
 
     Private Sub BtnPlayTimeRefresh_Click(sender As Object, e As EventArgs)

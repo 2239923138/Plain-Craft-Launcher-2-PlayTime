@@ -343,3 +343,6 @@ ASALocalRun/
 healthchecksdb
 
 MaskFiles/
+
+# Claude Code 本地配置(机器相关,不共享)
+.claude/settings.local.json
