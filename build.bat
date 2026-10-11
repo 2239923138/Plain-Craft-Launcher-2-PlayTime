@@ -54,18 +54,32 @@ echo.
 rem ---------- 2. restore NuGet ----------
 echo [1/3] Restoring NuGet packages ...
 dotnet restore "PCLCS\PCLCS.csproj" --nologo -v quiet
-if errorlevel 1 (
+rem Exact string comparison, not `if errorlevel 1`: a crashed tool can return a
+rem large negative exit code, and `if errorlevel 1` evaluates that as SUCCESS.
+if not "%ERRORLEVEL%"=="0" (
     echo [ERROR] NuGet restore failed.
     goto :fail
 )
 
+rem Shut down any lingering build-server node. A stale one makes MSBuild die
+rem with a different unrelated startup error on every run (MC1000,
+rem MissingMethodException, MSB4136, MSB1025, MSB4184 ...).
+dotnet build-server shutdown >nul 2>&1
+
 rem ---------- 3. build ----------
 echo [2/3] Building main project ...
+
+rem Delete the previous output BEFORE building. MSBuild can die without a
+rem trustworthy exit code, and without this the script would happily copy a
+rem STALE exe and print BUILD OK -- a false success that hides a broken build.
+if exist "Plain Craft Launcher 2\obj\%CONFIG%\Plain Craft Launcher 2.exe" del /q "Plain Craft Launcher 2\obj\%CONFIG%\Plain Craft Launcher 2.exe"
+if exist "Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe" del /q "Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe"
+
 rem nodeReuse:false avoids a flaky MC2000 error caused by MSBuild node reuse
 "%MSBUILD%" "Plain Craft Launcher 2\Plain Craft Launcher 2.vbproj" ^
     -p:Configuration=%CONFIG% -m -nodeReuse:false -v:minimal -nologo
-if errorlevel 1 (
-    echo [ERROR] Build failed.
+if not "%ERRORLEVEL%"=="0" (
+    echo [ERROR] Build failed with exit code %ERRORLEVEL%.
     goto :fail
 )
 
