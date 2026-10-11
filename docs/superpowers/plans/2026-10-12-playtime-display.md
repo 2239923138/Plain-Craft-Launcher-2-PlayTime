@@ -134,7 +134,7 @@ End Function
 ### 两个现成的关键锚点
 
 - **`McInstance.ToListItem()` 只有两个调用点**:`Controls\MyCard.vb:140`(版本选择列表)和 `Pages\PageInstance\PageInstanceOverall.xaml.vb:32`(版本设置概览顶部框)。这正好就是需要显示时长的两处,所以在这一个函数里填值可以同时覆盖两个界面,不用分别改。
-- **`MyListItem.xaml` 的所有列都按 `x:Name` 引用,没有任何地方按索引引用列**(`ColumnPaddingRight.Width`、`ColumnLogo.Width` 等)。所以在第 3 列之后插入一个新列是安全的,不会破坏现有布局代码。
+- **在 `MyListItem.xaml` 的 `1*` 列之后插入新列是安全的,但理由不是我最初写的「所有列都按名字引用」——那条是错的。** 实际上有几处用**数字索引**:`LabTitle` 的 `Grid.Column="3"`、`LabInfo` 的 `SetColumn(Lab, 3)`、`PathLogo` 的 `SetColumn(PathLogo, 2)`。之所以仍然安全,是因为**所有现有索引(2 和 3)都在插入点(4)之前**,而且 `ColumnPaddingRight` 是按名字引用的。**如果有人将来在索引 4 之前再插入一列,上面这些数字索引会全部错位,必须同步修改。**
 
 ---
 
