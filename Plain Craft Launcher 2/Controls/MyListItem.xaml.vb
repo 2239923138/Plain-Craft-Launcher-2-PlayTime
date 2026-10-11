@@ -77,6 +77,47 @@ Public Class MyListItem
         End Get
     End Property
 
+    '右侧游戏时长
+    Private _LabPlayTime As TextBlock = Nothing
+    Public ReadOnly Property LabPlayTime As TextBlock
+        Get
+            If _LabPlayTime Is Nothing Then
+                Dim Lab As New TextBlock With {
+                    .Name = "LabPlayTime",
+                    .SnapsToDevicePixels = False,
+                    .UseLayoutRounding = False,
+                    .HorizontalAlignment = HorizontalAlignment.Right,
+                    .VerticalAlignment = VerticalAlignment.Center,
+                    .IsHitTestVisible = False,
+                    .Visibility = Visibility.Collapsed,
+                    .FontSize = 12,
+                    .Opacity = 0.6,
+                    .Margin = New Thickness(4, 0, 5, 0)
+                }
+                SetColumn(Lab, 4)
+                SetRowSpan(Lab, 4)
+                Children.Add(Lab)
+                _LabPlayTime = Lab
+            End If
+            Return _LabPlayTime
+        End Get
+    End Property
+
+    '游戏时长文本
+    Private _PlayTime As String = ""
+    Public Property PlayTime As String
+        Get
+            Return _PlayTime
+        End Get
+        Set(value As String)
+            value = If(value, "")
+            If _PlayTime = value Then Return
+            _PlayTime = value
+            LabPlayTime.Text = value
+            LabPlayTime.Visibility = If(value = "", Visibility.Collapsed, Visibility.Visible)
+        End Set
+    End Property
+
 #End Region
 
 #Region "自定义属性"
@@ -574,6 +615,7 @@ Public Class MyListItem
                     Ani.Add(AaOpacity(ButtonStack, 1 - ButtonStack.Opacity, Time * 0.7, Time * 0.3))
                     Ani.Add(AaDouble(Sub(i) ColumnPaddingRight.Width = New GridLength(Math.Max(0, ColumnPaddingRight.Width.Value + i)),
                                      Math.Max(MinPaddingRight, 5 + Buttons.Count * 25) - ColumnPaddingRight.Width.Value, Time * 0.3, Time * 0.7))
+                    If LabPlayTime IsNot Nothing Then Ani.Add(AaOpacity(LabPlayTime, -LabPlayTime.Opacity, Time * 0.4))
                 End If
                 Ani.AddRange({
                              AaColor(RectBack, Border.BackgroundProperty, If(IsMouseDown, "ColorBrush6", "ColorBrushBg1"), Time),
@@ -592,6 +634,7 @@ Public Class MyListItem
                     Ani.Add(AaOpacity(ButtonStack, -ButtonStack.Opacity, Time * 0.4))
                     Ani.Add(AaDouble(Sub(i) ColumnPaddingRight.Width = New GridLength(Math.Max(0, ColumnPaddingRight.Width.Value + i)),
                                      MinPaddingRight - ColumnPaddingRight.Width.Value, Time * 0.4))
+                    If LabPlayTime IsNot Nothing Then Ani.Add(AaOpacity(LabPlayTime, 1 - LabPlayTime.Opacity, Time * 0.7, Time * 0.3))
                 End If
                 Ani.Add(AaOpacity(RectBack, -RectBack.Opacity, Time))
                 If IsScaleAnimationEnabled Then
@@ -610,6 +653,7 @@ Public Class MyListItem
                 If ButtonStack IsNot Nothing Then
                     ButtonStack.Opacity = 1
                     ColumnPaddingRight.Width = New GridLength(Math.Max(MinPaddingRight, 5 + Buttons.Count * 25))
+                    If LabPlayTime IsNot Nothing Then LabPlayTime.Opacity = 0
                 End If
                 '由于鼠标已经移入，所以直接实例化 RectBack
                 RectBack.Background = ColorBg1
@@ -620,6 +664,7 @@ Public Class MyListItem
                 If ButtonStack IsNot Nothing Then
                     ButtonStack.Opacity = 0
                     ColumnPaddingRight.Width = New GridLength(MinPaddingRight)
+                    If LabPlayTime IsNot Nothing Then LabPlayTime.Opacity = 1
                 End If
                 Me.RenderTransform = New ScaleTransform(1, 1)
                 If _RectBack IsNot Nothing Then
