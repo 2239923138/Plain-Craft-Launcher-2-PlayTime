@@ -906,6 +906,9 @@ ExitDataLoad:
                     .Info = Info, .Height = 42, .Tag = Me, .SnapsToDevicePixels = True, .Type = MyListItem.CheckType.Clickable,
                     .ContentHandler = ContentHandler
                 }
+                '游戏时长。只读后台统计好的内存缓存,这里不做磁盘 I/O。
+                Dim Ticks As Long = 0
+                If PlayTimeVersionCache.TryGetValue(PathVersion, Ticks) Then NewItem.PlayTime = PlayTimeFormat(Ticks)
                 '标题
                 NewItem.Inlines.Clear()
                 NewItem.Inlines.Add(New Run(Name))

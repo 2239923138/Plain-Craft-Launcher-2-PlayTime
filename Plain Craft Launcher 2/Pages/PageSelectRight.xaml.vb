@@ -3,6 +3,12 @@ Public Class PageSelectRight
     '窗口基础
     Private Sub PageSelectRight_Loaded(sender As Object, e As RoutedEventArgs) Handles Me.Loaded
         LoaderFolderRun(McInstanceListLoader, McFolderSelected, LoaderFolderRunType.RunOnUpdated, MaxDepth:=1, ExtraPath:="versions\")
+        '后台统计各版本游戏时长;统计完成后重建列表以显示时长
+        PlayTimeLoader.Start(0)
+        RunInNewThread(Sub()
+                           PlayTimeLoader.WaitForExit(0)
+                           RunInUi(Sub() McInstanceListUI())
+                       End Sub, "PlayTime List Refresh")
         PanBack.ScrollToHome()
     End Sub
     Private Sub LoaderInit() Handles Me.Initialized
@@ -22,7 +28,7 @@ Public Class PageSelectRight
 
 #Region "结果 UI 化"
 
-    Private Sub McInstanceListUI(Loader As LoaderTask(Of String, Integer))
+    Private Sub McInstanceListUI(Optional Loader As LoaderTask(Of String, Integer) = Nothing)
         Try
             '加载 UI
             PanMain.Children.Clear()
