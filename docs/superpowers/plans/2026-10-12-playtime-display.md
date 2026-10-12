@@ -1149,6 +1149,238 @@ git commit -m "chore(playtime): 完成游戏时长显示功能"
 
 ---
 
+## Task 8: 启动页卡片显示总时长(用户实测后追加)
+
+**Files:**
+- Modify: `Plain Craft Launcher 2\Pages\PageLaunch\PageLaunchRight.xaml`
+- Modify: `Plain Craft Launcher 2\Pages\PageLaunch\PageLaunchRight.xaml.vb`
+
+**Interfaces:**
+- Consumes: Task 1 的 `PlayTimeFormat`、Task 3 的 `PlayTimeVersionCache`
+- Produces: 无
+
+**背景:** 用户把 exe 放到自己的游戏目录实测后反馈 —— 启动页那卡片要能看到「所有版本加起来」的总时长。现在的实现把合计塞在底部那行 12px 灰色小字里(`共 N 个版本,合计 X`),不够显眼。改成在卡片**顶部**放一行大字显示总时长,底部那行只留版本数与出错数。
+
+**同时修一个 Task 6 复审发现的冷启动缺口:** 时长填充目前是在首次 `Loaded` 时一次性跑的。冷启动时如果那一刻 `McInstanceList` 还没加载完,`PlayTimeLoader` 会扫到 **0 个版本**,卡片就一直停在「还没有读取到任何游戏版本。」,直到用户手动点刷新。兄弟页面 `PageLaunchLeft.xaml.vb:19-20` 的现成做法是订阅 `McInstanceListLoader.LoadingStateChanged`,照做即可。
+
+- [ ] **Step 1: 卡片里加一行总时长**
+
+把 `PageLaunchRight.xaml` 里「游戏时长」卡片的那个内层 `Grid` 换成下面这个结构。**注意:必须原样保留 `BtnPlayTimeRefresh` 元素已有的 `Logo`、`LogoScale`、`Text` 属性**(那是一长串图标路径,不要重打、不要改动),只调整它所在的外层 `Grid` 的 `Grid.Row`。
+
+```xml
+                <Grid Margin="20,38,20,18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <!--总时长:所有版本加起来,放在最上面显眼位置-->
+                    <TextBlock x:Name="LabPlayTimeTotal" Grid.Row="0" HorizontalAlignment="Left"
+                               FontSize="20" Foreground="{DynamicResource ColorBrush2}"
+                               Text="—" Margin="4,0,0,12" />
+                    <StackPanel x:Name="PanPlayTimeList" Grid.Row="1" />
+                    <Grid Grid.Row="2" Margin="0,10,0,0">
+                        <!-- 这里放原有的 LabPlayTimeHint 与 BtnPlayTimeRefresh,两者均保持原样,
+                             把这个外层 Grid 的 Row 从 1 改成 2 即可 -->
+                    </Grid>
+                </Grid>
+```
+
+- [ ] **Step 2: 在 RefreshPlayTime 里填总时长**
+
+把 `RefreshPlayTime()` 换成:
+
+```vb
+    Private Sub RefreshPlayTime()
+        PanPlayTimeList.Children.Clear()
+        Dim Instances = McInstanceList.Values.SelectMany(Function(List) List).ToList
+        If Instances.Count = 0 Then
+            LabPlayTimeTotal.Text = "—"
+            LabPlayTimeHint.Text = "还没有读取到任何游戏版本。"
+            Return
+        End If
+        'Ticks < 0 是「读取出错」,要一并列出让用户看见;0 表示没有游玩记录,不列
+        Dim Rows = Instances.Select(Function(I)
+                                        Dim T As Long = 0
+                                        PlayTimeVersionCache.TryGetValue(I.PathVersion, T)
+                                        Return (Instance:=I, Ticks:=T)
+                                    End Function).Where(Function(R) R.Ticks <> 0).OrderByDescending(Function(R) R.Ticks).ToList
+        If Rows.Count = 0 Then
+            LabPlayTimeTotal.Text = "—"
+            LabPlayTimeHint.Text = "还没有找到游玩记录。"
+            Return
+        End If
+        Dim Total As Long = 0
+        Dim Errored As Integer = 0
+        For Each Row In Rows
+            If Row.Ticks < 0 Then Errored += 1 Else Total += Row.Ticks
+            Dim Item As New MyListItem With {
+                .Title = Row.Instance.Name,
+                .PlayTime = PlayTimeFormat(Row.Ticks),
+                .Height = 42,
+                .Type = MyListItem.CheckType.Clickable,
+                .IsHitTestVisible = False
+            }
+            PanPlayTimeList.Children.Add(Item)
+        Next
+        Dim OkCount = Rows.Count - Errored
+        '总时长放最上面。全都读取出错时 Total 是 0,显示破折号而不是「0 秒」。
+        LabPlayTimeTotal.Text = If(OkCount > 0, $"总游戏时长:{PlayTimeFormat(Total)}", "—")
+        LabPlayTimeHint.Text = If(Errored = 0,
+                                  $"共 {OkCount} 个版本",
+                                  $"共 {OkCount} 个版本;另有 {Errored} 个版本读取出错")
+    End Sub
+```
+
+- [ ] **Step 3: 冷启动时也能填上内容**
+
+`Init()` 的一次性块里,把这两行:
+
+```vb
+        PlayTimeLoader.Start(0)
+        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+```
+
+换成:
+
+```vb
+        '版本列表可能还没加载完 —— 冷启动时本页第一次 Loaded 有可能早于它就绪,
+        '那时统计会扫到 0 个版本。挂上监听,等列表完成时再统计一次。
+        AddHandler McInstanceListLoader.LoadingStateChanged, AddressOf PlayTimeInstanceListChanged
+        PlayTimeInstanceListChanged()
+```
+
+并在类里新增:
+
+```vb
+    ''' <summary>
+    ''' 版本列表状态变化时调用。只在加载完成时统计 —— 列表还没就绪就统计会扫到 0 个版本,
+    ''' 卡片会一直停在「还没有读取到任何游戏版本。」。
+    ''' </summary>
+    Private Sub PlayTimeInstanceListChanged()
+        If McInstanceListLoader.State <> LoadState.Finished Then Return
+        PlayTimeLoader.Start(0)
+        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+    End Sub
+```
+
+**开工前先确认两件事**(都在别的文件里,读一下即可):`LoaderBase` 上确实有 `LoadingStateChanged` 事件(`PageLaunchLeft.xaml.vb:19-20` 在用),以及 `LoadState` 里有 `Finished`。若名字不对,按实际名字改,并在报告里说明。
+
+- [ ] **Step 4: 构建并目视验证**
+
+```bash
+build.bat Release
+```
+
+Expected: `BUILD OK`,产物是 `dist\Release\PCL2_ACE.exe` 且时间戳晚于源码改动。启动 exe:
+
+- 卡片顶部出现一行大字「总游戏时长:X 小时 Y 分钟」,下面是各版本列表,底部「共 N 个版本」
+- **冷启动就应该有内容** —— 不是先空着、点了刷新才出来
+- 日志里 `游戏时长统计完成` 那行应显示扫到了**非 0** 个版本(若显示 0 个,说明这条链路还没走通)
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add "Plain Craft Launcher 2/Pages/PageLaunch/PageLaunchRight.xaml" "Plain Craft Launcher 2/Pages/PageLaunch/PageLaunchRight.xaml.vb"
+git commit -m "feat(playtime): 启动页卡片顶部显示总游戏时长,并修复冷启动时列表未就绪导致的空卡片"
+```
+
+---
+
+## Task 9: 设置里手动填写玩家 UUID(用户实测后追加)
+
+**Files:**
+- Modify: `Plain Craft Launcher 2\Pages\PageSetup\Settings.vb`
+- Modify: `Plain Craft Launcher 2\Modules\Minecraft\ModPlayTime.vb`
+- Modify: `Plain Craft Launcher 2\Pages\PageSetup\PageSetupLaunch.xaml`
+
+**Interfaces:**
+- Consumes: Task 1 的 `PlayTimeCurrentAccount` / `PlayTimeAddOnline`
+- Produces: 无
+
+**背景:** 用户实测发现部分版本显示「出错」。**根因已确认:** 「出错」只在「一个存档有多个统计文件、且没有一个匹配得上当前账号」时出现;而匹配用的 UUID 来自 `CacheMsV2Uuid`(微软)等键 —— **开源版没有 OAuth Client ID、无法微软登录**,所以自动拿不到正版 UUID。用户希望能在设置里手填。
+
+**为什么这张卡片放在「启动设置」而不是「高级选项」:** 「高级选项」是一个行号写死的显式 Grid,插一行要重编号后续所有元素,容易出错。新开一张卡片既安全又清晰。位置在页面末尾 `BtnSwitch` 按钮之前。
+
+**设置界面是声明式的** —— `<local:MyTextBox local:SettingService.Key="键名" …>` 挂上即可,`PageSetupLaunch` 的 `Refresh()` 会调 `SettingService.RefreshSettings(Me)` 遍历整棵树自动读写,**不需要额外接线代码**。但**新设置必须先注册进 `Settings.Entries`**,否则 `GetDefault` 里的 `Entries(Key)` 会抛异常。
+
+- [ ] **Step 1: 注册新设置**
+
+在 `Settings.vb` 的 `Entries` 列表里,`New Setting("LaunchArgumentTitle", ""),` 那一行**之后**插入:
+
+```vb
+        New Setting("PlayTimeUuid", ""),
+```
+
+- [ ] **Step 2: 让匹配逻辑用上它**
+
+在 `ModPlayTime.vb` 的 `PlayTimeCurrentAccount()` 里,三个 `PlayTimeAddOnline(...)` 调用**之后**、读 `LoginLegacyName` 之前,插入:
+
+```vb
+        '手动填写的 UUID。开源版无法微软登录,自动拿不到正版 UUID,所以允许在设置里手填。
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("PlayTimeUuid"))
+```
+
+同时把 `PlayTimeAddOnline` 换成(去大括号 + 长度校验,避免设置里填错的东西把匹配搞乱):
+
+```vb
+    ''' <summary>
+    ''' 把一个在线 UUID 加进匹配集合。会去掉连字符与大括号并转小写;
+    ''' 长度不是 32 位的直接忽略,避免脏数据(例如设置里输错的文本)污染匹配。
+    ''' </summary>
+    Private Sub PlayTimeAddOnline(Target As PlayTimeAccount, Uuid As String)
+        If String.IsNullOrWhiteSpace(Uuid) Then Return
+        Dim Normalized As String = Uuid.Trim().Trim("{"c, "}"c).Replace("-", "").ToLowerInvariant()
+        If Normalized.Length <> 32 Then Return
+        Target.Online.Add(Normalized)
+    End Sub
+```
+
+- [ ] **Step 3: 加设置界面**
+
+在 `PageSetupLaunch.xaml` 里,页尾那个 `<local:MyExtraTextButton HorizontalAlignment="Center" Margin="0,-5,0,15" x:Name="BtnSwitch" …>` 的**前面**插入:
+
+```xml
+            <local:MyCard Margin="0,0,0,15" Title="游戏时长统计">
+                <Grid Margin="25,40,25,25">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Name" />
+                        <ColumnDefinition Width="1*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="9" />
+                        <RowDefinition Height="28" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock VerticalAlignment="Center" HorizontalAlignment="Left" Text="玩家 UUID" Margin="0,0,25,0" />
+                    <local:MyTextBox local:SettingService.Key="PlayTimeUuid" x:Name="TextPlayTimeUuid"
+                                     Grid.Row="2" Grid.ColumnSpan="2" Grid.Column="1" MaxLength="40" HintText="留空则不使用"
+                                     ToolTip="统计游戏时长时,只累加属于这个 UUID 的存档统计文件。&#xa;留空则只使用 PCL 当前登录账号的 UUID。&#xa;&#xa;在哪里找:打开该版本的 saves 文件夹 → 任意存档 → stats 文件夹,里面文件名的 .json 前面那一段就是 UUID。&#xa;&#xa;开源版本无法进行微软登录,自动拿不到正版 UUID,所以需要在这里手动填写。" />
+                    <TextBlock Grid.Row="3" Grid.ColumnSpan="2" Margin="0,10,0,0" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{DynamicResource ColorBrushGray3}"
+                               Text="填写后回到启动页点一次「刷新统计」重新统计。支持带连字符或不带连字符的写法。" />
+                </Grid>
+            </local:MyCard>
+```
+
+- [ ] **Step 4: 构建并验证**
+
+```bash
+build.bat Release
+```
+
+Expected: `BUILD OK`;产物时间戳晚于源码改动。启动 exe → 设置 → 启动设置,页面末尾出现「游戏时长统计」卡片,里面有「玩家 UUID」输入框。填入一个 UUID 后关掉 PCL 重开,值应当还在(说明已持久化)。回到启动页点「刷新统计」,原先显示「出错」的多文件存档应当变成正常时长。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add "Plain Craft Launcher 2/Pages/PageSetup/Settings.vb" "Plain Craft Launcher 2/Modules/Minecraft/ModPlayTime.vb" "Plain Craft Launcher 2/Pages/PageSetup/PageSetupLaunch.xaml"
+git commit -m "feat(playtime): 设置里可手动填写玩家 UUID,解决开源版无法登录导致的匹配失败"
+```
+
+---
+
 ## 附:已知局限
 
 这几点是当前设计的固有边界,不是 bug。若用户之后要求,再单独开任务处理。
