@@ -323,6 +323,12 @@ Public Class PageLaunchRight
     Private Sub BtnPlayTimeRefresh_Click(sender As Object, e As EventArgs)
         LabPlayTimeHint.Text = "正在统计…"
         PlayTimeRefreshAll()
+        '统计在后台跑,必须等它结束再重建列表。少了这一步,提示会永远停在「正在统计…」。
+        'WaitForExit 内部会先调 Start,所以这里等价于「启动并等待」。
+        RunInNewThread(Sub()
+                           PlayTimeLoader.WaitForExit(0)
+                           RunInUi(AddressOf RefreshPlayTime)
+                       End Sub, "PlayTime Refresh Ui")
     End Sub
 
 End Class
