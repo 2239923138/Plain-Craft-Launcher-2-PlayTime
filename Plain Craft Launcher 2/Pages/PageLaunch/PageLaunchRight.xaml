@@ -13,9 +13,14 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <StackPanel x:Name="PanPlayTimeList" Grid.Row="0" />
-                    <Grid Grid.Row="1" Margin="0,10,0,0">
+                    <!--总时长:所有版本加起来,放在最上面显眼位置-->
+                    <TextBlock x:Name="LabPlayTimeTotal" Grid.Row="0" HorizontalAlignment="Left"
+                               FontSize="20" Foreground="{DynamicResource ColorBrush2}"
+                               Text="—" Margin="4,0,0,12" />
+                    <StackPanel x:Name="PanPlayTimeList" Grid.Row="1" />
+                    <Grid Grid.Row="2" Margin="0,10,0,0">
                         <TextBlock x:Name="LabPlayTimeHint" HorizontalAlignment="Left" VerticalAlignment="Center"
                                    FontSize="12" Foreground="{DynamicResource ColorBrushGray3}"
                                    Text="正在统计…" />

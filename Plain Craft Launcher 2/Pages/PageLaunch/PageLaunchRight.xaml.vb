@@ -20,8 +20,10 @@ Public Class PageLaunchRight
 
         BtnPlayTimeRefresh.Show = True
         AddHandler BtnPlayTimeRefresh.Click, AddressOf BtnPlayTimeRefresh_Click
-        PlayTimeLoader.Start(0)
-        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+        '版本列表可能还没加载完 —— 冷启动时本页第一次 Loaded 有可能早于它就绪,
+        '那时统计会扫到 0 个版本。挂上监听,等列表完成时再统计一次。
+        AddHandler McInstanceListLoader.LoadingStateChanged, AddressOf PlayTimeInstanceListChanged
+        PlayTimeInstanceListChanged()
     End Sub
 
 #Region "主页"
@@ -289,10 +291,21 @@ Public Class PageLaunchRight
 
 
     '游戏时长卡片:列出每个版本的游玩总时长
+    ''' <summary>
+    ''' 版本列表状态变化时调用。只在加载完成时统计 —— 列表还没就绪就统计会扫到 0 个版本,
+    ''' 卡片会一直停在「还没有读取到任何游戏版本。」。
+    ''' </summary>
+    Private Sub PlayTimeInstanceListChanged()
+        If McInstanceListLoader.State <> LoadState.Finished Then Return
+        PlayTimeLoader.Start(0)
+        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+    End Sub
+
     Private Sub RefreshPlayTime()
         PanPlayTimeList.Children.Clear()
         Dim Instances = McInstanceList.Values.SelectMany(Function(List) List).ToList
         If Instances.Count = 0 Then
+            LabPlayTimeTotal.Text = "—"
             LabPlayTimeHint.Text = "还没有读取到任何游戏版本。"
             Return
         End If
@@ -303,6 +316,7 @@ Public Class PageLaunchRight
                                         Return (Instance:=I, Ticks:=T)
                                     End Function).Where(Function(R) R.Ticks <> 0).OrderByDescending(Function(R) R.Ticks).ToList
         If Rows.Count = 0 Then
+            LabPlayTimeTotal.Text = "—"
             LabPlayTimeHint.Text = "还没有找到游玩记录。"
             Return
         End If
@@ -320,9 +334,11 @@ Public Class PageLaunchRight
             PanPlayTimeList.Children.Add(Item)
         Next
         Dim OkCount = Rows.Count - Errored
+        '总时长放最上面。全都读取出错时 Total 是 0,显示破折号而不是「0 秒」。
+        LabPlayTimeTotal.Text = If(OkCount > 0, $"总游戏时长:{PlayTimeFormat(Total)}", "—")
         LabPlayTimeHint.Text = If(Errored = 0,
-                                  $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)}",
-                                  $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)};另有 {Errored} 个版本读取出错")
+                                  $"共 {OkCount} 个版本",
+                                  $"共 {OkCount} 个版本;另有 {Errored} 个版本读取出错")
     End Sub
 
     ''' <summary>
