@@ -1021,14 +1021,26 @@ git commit -m "feat(playtime): 版本条目与概览头部显示游戏时长"
     Private Sub BtnPlayTimeRefresh_Click(sender As Object, e As EventArgs)
         LabPlayTimeHint.Text = "正在统计…"
         PlayTimeRefreshAll()
+        '统计在后台跑,必须等它结束再重建列表。少了这一步,提示会永远停在「正在统计…」。
+        'WaitForExit 内部会先调 Start,所以这里等价于「启动并等待」。
+        RunInNewThread(Sub()
+                           PlayTimeLoader.WaitForExit(0)
+                           RunInUi(AddressOf RefreshPlayTime)
+                       End Sub, "PlayTime Refresh Ui")
     End Sub
 ```
 
 - [ ] **Step 3: 挂上按钮与加载回调**
 
-在 `PageLaunchRight.xaml.vb` 的 `Private Sub Init() Handles Me.Loaded`(**第 5 行**)方法体末尾追加:
+**`MyExtraTextButton` 需要两处额外配置,否则它根本不可见** —— 这是实测踩出来的,不是可选项:
+
+- XAML 里要给它 `Logo`(一套图标路径)与 `LogoScale`。参考 `Pages\PageDownload\PageDownloadInstall.xaml` 的声明方式。
+- 代码里要显式写 `BtnPlayTimeRefresh.Show = True`。该控件初始 `ScaleX = 0`,而 `_GetAllAnimControls`(`Controls\MyPageRight.vb:478` 附近)遍历到 `MyCard` 就停了,卡片内部的子控件不会被自动「显示」—— 少了这一行,按钮永远不可见。仓库里 `PageDownloadInstall.xaml.vb:56` 是同样的写法。
+
+在 `PageLaunchRight.xaml.vb` 的 `Private Sub Init() Handles Me.Loaded` 方法体末尾追加:
 
 ```vb
+        BtnPlayTimeRefresh.Show = True
         AddHandler BtnPlayTimeRefresh.Click, AddressOf BtnPlayTimeRefresh_Click
         PlayTimeLoader.Start(0)
         RunInNewThread(Sub()
