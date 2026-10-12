@@ -108,6 +108,8 @@ Public Module ModPlayTime
         PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheMsV2Uuid"))
         PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheNideUuid"))
         PlayTimeAddOnline(Result, Settings.Get(Of String)("CacheAuthUuid"))
+        '手动填写的 UUID。开源版无法微软登录,自动拿不到正版 UUID,所以允许在设置里手填。
+        PlayTimeAddOnline(Result, Settings.Get(Of String)("PlayTimeUuid"))
         '离线登录:LoginLegacyName 是以 ¨ 分隔的玩家名列表,第一个是当前使用的那个
         Dim LegacyName = Settings.Get(Of String)("LoginLegacyName")
         If Not String.IsNullOrWhiteSpace(LegacyName) Then
@@ -117,9 +119,15 @@ Public Module ModPlayTime
         Return Result
     End Function
 
+    ''' <summary>
+    ''' 把一个在线 UUID 加进匹配集合。会去掉连字符与大括号并转小写;
+    ''' 长度不是 32 位的直接忽略,避免脏数据(例如设置里输错的文本)污染匹配。
+    ''' </summary>
     Private Sub PlayTimeAddOnline(Target As PlayTimeAccount, Uuid As String)
         If String.IsNullOrWhiteSpace(Uuid) Then Return
-        Target.Online.Add(Uuid.Replace("-", "").ToLowerInvariant())
+        Dim Normalized As String = Uuid.Trim().Trim("{"c, "}"c).Replace("-", "").ToLowerInvariant()
+        If Normalized.Length <> 32 Then Return
+        Target.Online.Add(Normalized)
     End Sub
 
 #End Region

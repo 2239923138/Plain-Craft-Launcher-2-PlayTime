@@ -296,6 +296,27 @@
                                   CanClose="True" RelativeSetup="HintMoreAdvancedSetup" />
                 </Grid>
             </local:MyCard>
+            <local:MyCard Margin="0,0,0,15" Title="游戏时长统计">
+                <Grid Margin="25,40,25,25">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Name" />
+                        <ColumnDefinition Width="1*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="9" />
+                        <RowDefinition Height="28" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock VerticalAlignment="Center" HorizontalAlignment="Left" Text="玩家 UUID" Margin="0,0,25,0" />
+                    <local:MyTextBox local:SettingService.Key="PlayTimeUuid" x:Name="TextPlayTimeUuid"
+                                     Grid.Row="2" Grid.ColumnSpan="2" Grid.Column="1" MaxLength="40" HintText="留空则不使用"
+                                     ToolTip="统计游戏时长时,只累加属于这个 UUID 的存档统计文件。&#xa;留空则只使用 PCL 当前登录账号的 UUID。&#xa;&#xa;在哪里找:打开该版本的 saves 文件夹 → 任意存档 → stats 文件夹,里面文件名的 .json 前面那一段就是 UUID。&#xa;&#xa;开源版本无法进行微软登录,自动拿不到正版 UUID,所以需要在这里手动填写。" />
+                    <TextBlock Grid.Row="3" Grid.ColumnSpan="2" Margin="0,10,0,0" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{DynamicResource ColorBrushGray3}"
+                               Text="填写后回到启动页点一次「刷新统计」重新统计。支持带连字符或不带连字符的写法。" />
+                </Grid>
+            </local:MyCard>
             <local:MyExtraTextButton HorizontalAlignment="Center" Margin="0,-5,0,15"
                 x:Name="BtnSwitch" Text="版本独立设置"
                 LogoScale="0.9" Logo="M73 584L920 584 608 896C579 925 579 972 608 1001 637 1030 683 1030 712 1001L1149 565C1164 550 1170 531 1170 511 1170 492 1164 472 1149 457L712 21C683-7 637-7 608 21 579 50 579 97 608 126L920 438 73 438C33 438 0 471 0 511 0 551 33 584 73 584Z" />
