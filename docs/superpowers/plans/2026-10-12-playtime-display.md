@@ -1020,13 +1020,9 @@ git commit -m "feat(playtime): 版本条目与概览头部显示游戏时长"
 
     Private Sub BtnPlayTimeRefresh_Click(sender As Object, e As EventArgs)
         LabPlayTimeHint.Text = "正在统计…"
+        '清缓存并重新统计,然后等它跑完再重建卡片。少了等待,提示会永远停在「正在统计…」。
         PlayTimeRefreshAll()
-        '统计在后台跑,必须等它结束再重建列表。少了这一步,提示会永远停在「正在统计…」。
-        'WaitForExit 内部会先调 Start,所以这里等价于「启动并等待」。
-        RunInNewThread(Sub()
-                           PlayTimeLoader.WaitForExit(0)
-                           RunInUi(AddressOf RefreshPlayTime)
-                       End Sub, "PlayTime Refresh Ui")
+        RefreshPlayTimeWhenReady("PlayTime Refresh Ui")
     End Sub
 ```
 
@@ -1037,16 +1033,54 @@ git commit -m "feat(playtime): 版本条目与概览头部显示游戏时长"
 - XAML 里要给它 `Logo`(一套图标路径)与 `LogoScale`。参考 `Pages\PageDownload\PageDownloadInstall.xaml` 的声明方式。
 - 代码里要显式写 `BtnPlayTimeRefresh.Show = True`。该控件初始 `ScaleX = 0`,而 `_GetAllAnimControls`(`Controls\MyPageRight.vb:478` 附近)遍历到 `MyCard` 就停了,卡片内部的子控件不会被自动「显示」—— 少了这一行,按钮永远不可见。仓库里 `PageDownloadInstall.xaml.vb:56` 是同样的写法。
 
-在 `PageLaunchRight.xaml.vb` 的 `Private Sub Init() Handles Me.Loaded` 方法体末尾追加:
+**这个页面的实例是复用的,`Loaded` 会反复触发。** `FormMain` 里 `PageLaunchRight` 只 new 一次,而 `PageChangeAnim` 在每次「启动页 → 别的页 → 启动页」时把它 detach 再 re-attach,于是 `Loaded` 重新触发。**没有幂等守卫的话,`AddHandler` 会一次次累积,重访 N 次后点一下「刷新统计」就执行 N 遍。**
+
+仓库里的兄弟页面早就处理了这个:[`PageLaunchLeft.xaml.vb`](Plain Craft Launcher 2/Pages/PageLaunch/PageLaunchLeft.xaml.vb) 用了 `Private IsLoad As Boolean = False` 字段 + `If IsLoad Then Return` / `IsLoad = True`,`PageDownloadInstall.xaml.vb:22` 同样。**照搬这个模式,不要自创。**
+
+在 `PageLaunchRight` 类里新增字段,并把 `Init()` 的一次性部分放到守卫之后:
 
 ```vb
+    '是否已经做过一次性的初始化。本页面实例会被复用,Loaded 会反复触发。
+    Private IsLoad As Boolean = False
+
+    Private Sub Init() Handles Me.Loaded
+        PanBack.ScrollToHome()
+        PanLog.Visibility = ModeDebug.ToVisibility
+        '快照版提示
+        PanHint.Visibility =
+            (BuildType <> BuildTypes.Release AndAlso VersionBranchMain = "Official" AndAlso
+             CurrentRank < DonationRank.Rank23 AndAlso Not Settings.Get(Of Boolean)("HintSnapshot")).ToVisibility
+
+        '以下只做一次 —— 没有这个守卫,每次切回启动页都会再挂一遍事件
+        If IsLoad Then Return
+        IsLoad = True
+
         BtnPlayTimeRefresh.Show = True
         AddHandler BtnPlayTimeRefresh.Click, AddressOf BtnPlayTimeRefresh_Click
         PlayTimeLoader.Start(0)
+        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+    End Sub
+```
+
+再新增一个共用的等待辅助函数(`Init()` 和刷新按钮都用它,**不要写两遍**):
+
+```vb
+    ''' <summary>
+    ''' 等后台统计结束,然后回到 UI 线程重建卡片。
+    ''' 等待失败时把提示改成错误文案 —— 否则它会永远卡在「正在统计…」。
+    ''' </summary>
+    Private Sub RefreshPlayTimeWhenReady(ThreadName As String)
         RunInNewThread(Sub()
-                           PlayTimeLoader.WaitForExit(0)
+                           Try
+                               PlayTimeLoader.WaitForExit(0)
+                           Catch ex As Exception
+                               Logger.Warn(ex, "等待游戏时长统计失败")
+                               RunInUi(Sub() LabPlayTimeHint.Text = "统计失败,请查看日志。")
+                               Return
+                           End Try
                            RunInUi(AddressOf RefreshPlayTime)
-                       End Sub, "PlayTime Ui Fill")
+                       End Sub, ThreadName)
+    End Sub
 ```
 
 - [ ] **Step 4: 构建并目视验证**

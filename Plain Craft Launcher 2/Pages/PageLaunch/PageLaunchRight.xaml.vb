@@ -3,6 +3,9 @@ Imports System.Windows.Threading
 Public Class PageLaunchRight
     Implements IRefreshable, IDispatcherUnhandledException
 
+    '是否已经做过一次性的初始化。本页面实例会被复用,Loaded 会反复触发。
+    Private IsLoad As Boolean = False
+
     Private Sub Init() Handles Me.Loaded
         PanBack.ScrollToHome()
         PanLog.Visibility = ModeDebug.ToVisibility
@@ -10,13 +13,15 @@ Public Class PageLaunchRight
         PanHint.Visibility =
             (BuildType <> BuildTypes.Release AndAlso VersionBranchMain = "Official" AndAlso
              CurrentRank < DonationRank.Rank23 AndAlso Not Settings.Get(Of Boolean)("HintSnapshot")).ToVisibility
+
+        '以下只做一次 —— 没有这个守卫,每次切回启动页都会再挂一遍事件
+        If IsLoad Then Return
+        IsLoad = True
+
         BtnPlayTimeRefresh.Show = True
         AddHandler BtnPlayTimeRefresh.Click, AddressOf BtnPlayTimeRefresh_Click
         PlayTimeLoader.Start(0)
-        RunInNewThread(Sub()
-                           PlayTimeLoader.WaitForExit(0)
-                           RunInUi(AddressOf RefreshPlayTime)
-                       End Sub, "PlayTime Ui Fill")
+        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
     End Sub
 
 #Region "主页"
@@ -320,15 +325,28 @@ Public Class PageLaunchRight
                                   $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)};另有 {Errored} 个版本读取出错")
     End Sub
 
+    ''' <summary>
+    ''' 等后台统计结束,然后回到 UI 线程重建卡片。
+    ''' 等待失败时把提示改成错误文案 —— 否则它会永远卡在「正在统计…」。
+    ''' </summary>
+    Private Sub RefreshPlayTimeWhenReady(ThreadName As String)
+        RunInNewThread(Sub()
+                           Try
+                               PlayTimeLoader.WaitForExit(0)
+                           Catch ex As Exception
+                               Logger.Warn(ex, "等待游戏时长统计失败")
+                               RunInUi(Sub() LabPlayTimeHint.Text = "统计失败,请查看日志。")
+                               Return
+                           End Try
+                           RunInUi(AddressOf RefreshPlayTime)
+                       End Sub, ThreadName)
+    End Sub
+
     Private Sub BtnPlayTimeRefresh_Click(sender As Object, e As EventArgs)
         LabPlayTimeHint.Text = "正在统计…"
+        '清缓存并重新统计,然后等它跑完再重建卡片。少了等待,提示会永远停在「正在统计…」。
         PlayTimeRefreshAll()
-        '统计在后台跑,必须等它结束再重建列表。少了这一步,提示会永远停在「正在统计…」。
-        'WaitForExit 内部会先调 Start,所以这里等价于「启动并等待」。
-        RunInNewThread(Sub()
-                           PlayTimeLoader.WaitForExit(0)
-                           RunInUi(AddressOf RefreshPlayTime)
-                       End Sub, "PlayTime Refresh Ui")
+        RefreshPlayTimeWhenReady("PlayTime Refresh Ui")
     End Sub
 
 End Class
