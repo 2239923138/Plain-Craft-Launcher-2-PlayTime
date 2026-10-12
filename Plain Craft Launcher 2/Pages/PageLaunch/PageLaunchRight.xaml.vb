@@ -10,6 +10,13 @@ Public Class PageLaunchRight
         PanHint.Visibility =
             (BuildType <> BuildTypes.Release AndAlso VersionBranchMain = "Official" AndAlso
              CurrentRank < DonationRank.Rank23 AndAlso Not Settings.Get(Of Boolean)("HintSnapshot")).ToVisibility
+        BtnPlayTimeRefresh.Show = True
+        AddHandler BtnPlayTimeRefresh.Click, AddressOf BtnPlayTimeRefresh_Click
+        PlayTimeLoader.Start(0)
+        RunInNewThread(Sub()
+                           PlayTimeLoader.WaitForExit(0)
+                           RunInUi(AddressOf RefreshPlayTime)
+                       End Sub, "PlayTime Ui Fill")
     End Sub
 
 #Region "主页"
@@ -274,5 +281,48 @@ Public Class PageLaunchRight
     Private LoadContentLock As New Object
 
 #End Region
+
+
+    '游戏时长卡片:列出每个版本的游玩总时长
+    Private Sub RefreshPlayTime()
+        PanPlayTimeList.Children.Clear()
+        Dim Instances = McInstanceList.Values.SelectMany(Function(List) List).ToList
+        If Instances.Count = 0 Then
+            LabPlayTimeHint.Text = "还没有读取到任何游戏版本。"
+            Return
+        End If
+        'Ticks < 0 是「读取出错」,要一并列出让用户看见;0 表示没有游玩记录,不列
+        Dim Rows = Instances.Select(Function(I)
+                                        Dim T As Long = 0
+                                        PlayTimeVersionCache.TryGetValue(I.PathVersion, T)
+                                        Return (Instance:=I, Ticks:=T)
+                                    End Function).Where(Function(R) R.Ticks <> 0).OrderByDescending(Function(R) R.Ticks).ToList
+        If Rows.Count = 0 Then
+            LabPlayTimeHint.Text = "还没有找到游玩记录。"
+            Return
+        End If
+        Dim Total As Long = 0
+        Dim Errored As Integer = 0
+        For Each Row In Rows
+            If Row.Ticks < 0 Then Errored += 1 Else Total += Row.Ticks
+            Dim Item As New MyListItem With {
+                .Title = Row.Instance.Name,
+                .PlayTime = PlayTimeFormat(Row.Ticks),
+                .Height = 42,
+                .Type = MyListItem.CheckType.Clickable,
+                .IsHitTestVisible = False
+            }
+            PanPlayTimeList.Children.Add(Item)
+        Next
+        Dim OkCount = Rows.Count - Errored
+        LabPlayTimeHint.Text = If(Errored = 0,
+                                  $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)}",
+                                  $"共 {OkCount} 个版本,合计 {PlayTimeFormat(Total)};另有 {Errored} 个版本读取出错")
+    End Sub
+
+    Private Sub BtnPlayTimeRefresh_Click(sender As Object, e As EventArgs)
+        LabPlayTimeHint.Text = "正在统计…"
+        PlayTimeRefreshAll()
+    End Sub
 
 End Class
