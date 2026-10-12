@@ -1254,15 +1254,25 @@ git commit -m "chore(playtime): 完成游戏时长显示功能"
 
 ```vb
     ''' <summary>
-    ''' 版本列表状态变化时调用。只在加载完成时统计 —— 列表还没就绪就统计会扫到 0 个版本,
-    ''' 卡片会一直停在「还没有读取到任何游戏版本。」。
+    ''' 版本列表状态变化时调用。只在列表结束时统计 —— 冷启动时本页第一次 Loaded
+    ''' 可能早于列表就绪,那时统计会扫到 0 个版本,卡片会一直是空的。
+    ''' 失败或取消时也要收敛,否则提示会永远停在「正在统计…」。
     ''' </summary>
     Private Sub PlayTimeInstanceListChanged()
-        If McInstanceListLoader.State <> LoadState.Finished Then Return
-        PlayTimeLoader.Start(0)
-        RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+        Select Case McInstanceListLoader.State
+            Case LoadState.Finished
+                PlayTimeLoader.Start(0)
+                RefreshPlayTimeWhenReady("PlayTime Ui Fill")
+            Case LoadState.Failed, LoadState.Canceled
+                LabPlayTimeTotal.Text = "—"
+                LabPlayTimeHint.Text = "游戏版本列表加载失败,请稍后重试。"
+            Case Else
+                'Waiting / Loading:什么都不做,等它出结果
+        End Select
     End Sub
 ```
+
+**注意这里必须收敛,不能只看 `Finished`。** 兄弟页面 `PageLaunchLeft.xaml.vb` 的 `RefreshButtonsUI` 只把 `Loading` 当进行中,失败和取消也会让它收敛 —— 只判断 `= Finished` 的话,列表加载失败时卡片会**永远停在「正在统计…」**,和已经修过的两处是同一类缺陷。
 
 **开工前先确认两件事**(都在别的文件里,读一下即可):`LoaderBase` 上确实有 `LoadingStateChanged` 事件(`PageLaunchLeft.xaml.vb:19-20` 在用),以及 `LoadState` 里有 `Finished`。若名字不对,按实际名字改,并在报告里说明。
 
